@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(pip install python-docx openpyxl pandas -q 2>&1)",
+      "Bash(python -m streamlit run app/streamlit_app.py --server.headless=true --server.port=8501)",
+      "Bash(curl -s -o /dev/null -w \"streamlit:%{http_code}\\\\n\" http://localhost:8501)",
+      "Bash(curl -s -o /dev/null -w \"api:%{http_code}\\\\n\" http://localhost:8000/health)"
+    ]
+  }
+}
