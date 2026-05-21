@@ -1,4 +1,4 @@
-# Vahan Auto-Analytics Hub
+# Vahan Auto-Analytics Hub (v2 — RTO intelligence)
 
 End-to-end analytics for India's vehicle registration data (Vahan). Ingests the
 38 `Vahan_*_Unified.xlsx` cross-tabs, stores them in DuckDB, exposes the
