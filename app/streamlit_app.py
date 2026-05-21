@@ -36,12 +36,14 @@ def _stats():
         return {"error": str(e)}
 
 
-@st.cache_resource(show_spinner="First-time setup: ingesting Vahan data…")
+@st.cache_resource(show_spinner="First-time setup: ingesting Vahan + RTO data…")
 def _bootstrap():
-    """On first run (e.g. fresh Streamlit Cloud container) seed DuckDB from data/ytd/."""
+    """On first run (e.g. fresh Streamlit Cloud container) seed DuckDB."""
     s = ingest.stats()
     if s.get("rows", 0) == 0:
         ingest.refresh_ytd()
+    if s.get("rto_rows", 0) == 0 or s.get("dim_rto_rows", 0) == 0:
+        ingest.refresh_rto()
     return ingest.stats()
 
 
@@ -70,6 +72,14 @@ with st.sidebar:
         with st.spinner("Parsing 38 files…"):
             res = ingest.refresh_ytd()
         st.success(f"Loaded {res['files']} files / {res['rows']:,} rows")
+        st.rerun()
+    if st.button("📍 Re-ingest RTO + dim_rto", use_container_width=True):
+        with st.spinner("Parsing 245 RTO files + matrix…"):
+            res = ingest.refresh_rto()
+        st.success(f"RTO: {res['files']} files / {res['rows']:,} rows; "
+                   f"dim_rto: {res.get('dim_rto_rows', 0):,}")
+        if res.get("tier_warning"):
+            st.warning(f"⚠️ Tier drift: {res['tier_warning']}")
         st.rerun()
 
     st.divider()

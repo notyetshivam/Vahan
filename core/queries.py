@@ -168,6 +168,173 @@ def maker_in_month(maker: str, year: int, month: str) -> float | None:
     return float(r[0]) if r and r[0] is not None else None
 
 
+# ====================================================================
+# RTO-level analytics (Phase v2 — joins fact_rto with dim_rto)
+# ====================================================================
+
+def list_regions() -> list[str]:
+    df = _df("SELECT DISTINCT region FROM dim_rto WHERE region IS NOT NULL ORDER BY region;")
+    return df["region"].tolist()
+
+
+def list_tiers() -> list[str]:
+    df = _df("SELECT DISTINCT urban_rural_proxy AS t FROM dim_rto "
+             "WHERE urban_rural_proxy IS NOT NULL ORDER BY t;")
+    return df["t"].tolist()
+
+
+def list_states_in_regions(regions: Iterable[str] | None = None) -> list[str]:
+    if not regions:
+        df = _df("SELECT DISTINCT state_name FROM dim_rto WHERE state_name IS NOT NULL ORDER BY 1;")
+    else:
+        rs = list(regions)
+        ph = ",".join(["?"] * len(rs))
+        df = _df(
+            f"SELECT DISTINCT state_name FROM dim_rto "
+            f"WHERE state_name IS NOT NULL AND region IN ({ph}) ORDER BY 1;",
+            rs,
+        )
+    return df["state_name"].tolist()
+
+
+def dim_rto_df() -> pd.DataFrame:
+    return _df("SELECT * FROM dim_rto ORDER BY state_name, rto_name;")
+
+
+def _filter_clause(
+    regions: Iterable[str] | None,
+    states: Iterable[str] | None,
+    tiers: Iterable[str] | None,
+    years: Iterable[int] | None,
+    col_dim: str | None,
+) -> tuple[str, list]:
+    where = ["1=1"]
+    params: list = []
+    if col_dim:
+        where.append("f.file_key = ?")
+        params.append(f"rto_{col_dim}".lower())
+    if regions:
+        rs = list(regions)
+        where.append(f"d.region IN ({','.join(['?']*len(rs))})")
+        params.extend(rs)
+    if states:
+        ss = list(states)
+        where.append(f"d.state_name IN ({','.join(['?']*len(ss))})")
+        params.extend(ss)
+    if tiers:
+        ts = list(tiers)
+        where.append(f"d.urban_rural_proxy IN ({','.join(['?']*len(ts))})")
+        params.extend(ts)
+    if years:
+        ys = list(years)
+        where.append(f"f.year IN ({','.join(['?']*len(ys))})")
+        params.extend(ys)
+    return " AND ".join(where), params
+
+
+def rto_slice(
+    col_dim: str = "MonthWise",
+    *,
+    regions: Iterable[str] | None = None,
+    states: Iterable[str] | None = None,
+    tiers: Iterable[str] | None = None,
+    col_values: Iterable[str] | None = None,
+    years: Iterable[int] | None = None,
+) -> pd.DataFrame:
+    """Long-form RTO slice with dim_rto context joined in."""
+    clause, params = _filter_clause(regions, states, tiers, years, col_dim)
+    if col_values:
+        cv = list(col_values)
+        clause += f" AND f.col_value IN ({','.join(['?']*len(cv))})"
+        params.extend(cv)
+    sql = f"""
+        SELECT f.rto, d.state_name, d.region, d.urban_rural_proxy AS tier,
+               f.col_dim, f.col_value, f.year, f.month, f.value
+        FROM vahan_rto_fact f
+        LEFT JOIN dim_rto d ON UPPER(TRIM(d.rto_name)) = UPPER(TRIM(f.rto))
+        WHERE {clause};
+    """
+    return _df(sql, params)
+
+
+def rto_top(
+    n: int = 10,
+    *,
+    col_dim: str = "MonthWise",
+    regions: Iterable[str] | None = None,
+    states: Iterable[str] | None = None,
+    tiers: Iterable[str] | None = None,
+    col_values: Iterable[str] | None = None,
+    years: Iterable[int] | None = None,
+) -> pd.DataFrame:
+    """Top-N RTOs by total registrations within the filter set."""
+    clause, params = _filter_clause(regions, states, tiers, years, col_dim)
+    if col_values:
+        cv = list(col_values)
+        clause += f" AND f.col_value IN ({','.join(['?']*len(cv))})"
+        params.extend(cv)
+    sql = f"""
+        SELECT f.rto, d.state_name, d.region, d.urban_rural_proxy AS tier,
+               SUM(f.value) AS total
+        FROM vahan_rto_fact f
+        LEFT JOIN dim_rto d ON UPPER(TRIM(d.rto_name)) = UPPER(TRIM(f.rto))
+        WHERE {clause}
+        GROUP BY 1,2,3,4
+        ORDER BY total DESC NULLS LAST
+        LIMIT ?;
+    """
+    params.append(int(n))
+    return _df(sql, params)
+
+
+def rto_pivot(
+    col_dim: str = "MonthWise",
+    *,
+    regions=None, states=None, tiers=None, years=None,
+) -> pd.DataFrame:
+    """Wide pivot: rows = RTO, cols = col_value of the chosen dim."""
+    df = rto_slice(col_dim, regions=regions, states=states, tiers=tiers, years=years)
+    if df.empty:
+        return df
+    out = df.pivot_table(
+        index=["rto", "state_name", "region", "tier"],
+        columns="col_value", values="value", aggfunc="sum", fill_value=0,
+    )
+    if col_dim == "MonthWise":
+        cols = [m for m in MONTHS_ORDER if m in out.columns]
+        out = out[cols]
+    out["TOTAL"] = out.sum(axis=1)
+    return out.sort_values("TOTAL", ascending=False).reset_index()
+
+
+def rto_aggregate_by(
+    by: str = "tier",
+    col_dim: str = "MonthWise",
+    *,
+    regions=None, states=None, tiers=None, years=None,
+) -> pd.DataFrame:
+    """Aggregate RTO sales by a grouping key (tier / region / state / month).
+
+    Returns long-form ``(group, col_value, value)``.
+    """
+    assert by in {"tier", "region", "state_name"}
+    col_expr = {"tier": "d.urban_rural_proxy", "region": "d.region",
+                "state_name": "d.state_name"}[by]
+    clause, params = _filter_clause(regions, states, tiers, years, col_dim)
+    sql = f"""
+        SELECT {col_expr} AS grp, f.col_value, SUM(f.value) AS value
+        FROM vahan_rto_fact f
+        LEFT JOIN dim_rto d ON UPPER(TRIM(d.rto_name)) = UPPER(TRIM(f.rto))
+        WHERE {clause}
+        GROUP BY 1,2 ORDER BY 1,2;
+    """
+    df = _df(sql, params)
+    if col_dim == "MonthWise" and not df.empty:
+        df["col_value"] = pd.Categorical(df["col_value"], categories=MONTHS_ORDER, ordered=True)
+        df = df.sort_values(["grp", "col_value"])
+    return df
+
+
 def ev_share_by_state(year: int) -> pd.DataFrame:
     """EV vs total registrations, by state."""
     sql = """

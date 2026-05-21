@@ -95,6 +95,70 @@ def refresh():
     return ingest.refresh_ytd()
 
 
+@app.post("/refresh/rto")
+def refresh_rto():
+    return ingest.refresh_rto()
+
+
+# ----- RTO endpoints (Phase v2) ----------------------------------------------
+
+@app.get("/regions")
+def regions():
+    return Q.list_regions()
+
+
+@app.get("/tiers")
+def tiers():
+    return Q.list_tiers()
+
+
+@app.get("/states")
+def states_in_regions(region: list[str] | None = Query(default=None)):
+    return Q.list_states_in_regions(region)
+
+
+def _parse_csv(s: str | None) -> list[str] | None:
+    if not s:
+        return None
+    return [x.strip() for x in s.split(",") if x.strip()]
+
+
+@app.get("/rto/top")
+def rto_top(
+    n: int = 10, col_dim: str = "MonthWise", year: int | None = None,
+    regions: str | None = None, states: str | None = None, tiers: str | None = None,
+):
+    df = Q.rto_top(
+        n, col_dim=col_dim, years=[year] if year else None,
+        regions=_parse_csv(regions), states=_parse_csv(states), tiers=_parse_csv(tiers),
+    )
+    return JSONResponse(df.to_dict(orient="records"))
+
+
+@app.get("/rto/pivot")
+def rto_pivot(
+    col_dim: str = "MonthWise", year: int | None = None,
+    regions: str | None = None, states: str | None = None, tiers: str | None = None,
+):
+    df = Q.rto_pivot(
+        col_dim=col_dim, years=[year] if year else None,
+        regions=_parse_csv(regions), states=_parse_csv(states), tiers=_parse_csv(tiers),
+    )
+    return JSONResponse(df.to_dict(orient="records"))
+
+
+@app.get("/rto/aggregate")
+def rto_aggregate(
+    by: str = "tier", col_dim: str = "MonthWise", year: int | None = None,
+    regions: str | None = None, states: str | None = None, tiers: str | None = None,
+):
+    df = Q.rto_aggregate_by(
+        by=by, col_dim=col_dim, years=[year] if year else None,
+        regions=_parse_csv(regions), states=_parse_csv(states), tiers=_parse_csv(tiers),
+    )
+    return JSONResponse(df.astype(object).where(df.notna(), None).to_dict(orient="records"))
+
+
 @app.get("/export.xlsx")
 def export_xlsx(year: int | None = None):
     data = export.build_workbook(year)

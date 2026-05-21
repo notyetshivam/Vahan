@@ -6,11 +6,23 @@ import os
 ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = Path(os.environ.get("VAHAN_DATA_DIR", ROOT / "data"))
 YTD_DIR = DATA_DIR / "ytd"
+RTO_DIR = DATA_DIR / "rto"
 HISTORICAL_DIR = DATA_DIR / "historical"
 DB_PATH = DATA_DIR / "vahan.duckdb"
 
-for p in (YTD_DIR, HISTORICAL_DIR):
+for p in (YTD_DIR, RTO_DIR, HISTORICAL_DIR):
     p.mkdir(parents=True, exist_ok=True)
+
+# Expected baseline stratification (per PRD addendum).
+EXPECTED_TIER_COUNTS = {
+    "Urban - Tier 1": 112,
+    "Urban - Tier 2": 101,
+    "Rural / Semi-Urban": 1179,
+}
+EXPECTED_TOTAL_RTOS = 1392
+TIER_DRIFT_THRESHOLD = 0.10  # warn admin if any tier deviates >10%
+REGIONS = ["North", "South", "East", "West", "Central", "North-East"]
+TIERS = ["Urban - Tier 1", "Urban - Tier 2", "Rural / Semi-Urban"]
 
 # 7 row dimensions x several column dimensions = 38 files.
 ROW_DIMS = ["State", "Maker", "Norms", "VehicleClass", "VehicleCategory",
